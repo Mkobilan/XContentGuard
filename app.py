@@ -129,11 +129,37 @@ def scan_post(post_id):
     from tasks import send_alert
     from models import TheftAlert
     from datetime import datetime
+    import requests
+    from bs4 import BeautifulSoup
     post = MonitoredPost.query.filter_by(id=post_id, user_id=current_user.id).first_or_404()
-    candidates = [
-        {'link': 'https://x.com/fake/status/123', 'text': post.original_text, 'img_url': ''},
-        {'link': 'https://x.com/fake/status/456', 'text': 'Different text', 'img_url': ''}
-    ]
+    candidates = []
+    # Real scraping for candidates
+    query = post.original_text[:50].replace(' ', '%20')
+    query_url = f"https://x.com/search?q={query}&src=typed_query&f=live"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
+    }
+    try:
+        response = requests.get(query_url, headers=headers)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            tweets = soup.find_all('div', {'data-testid': 'tweet'})
+            for tweet in tweets[:10]:
+                link_elem = tweet.find('a', href=lambda href: href and '/status/' in href)
+                link = 'https://x.com' + link_elem['href'] if link_elem else ''
+                text_elem = tweet.find('div', {'data-testid': 'tweetText'})
+                text = text_elem.get_text() if text_elem else ''
+                img_elem = tweet.find('img', src=lambda src: src and 'media' in src)
+                img_url = img_elem['src'] if img_elem else ''
+                if link and text and link != post.x_post_link:
+                    candidates.append({'link': link, 'text': text, 'img_url': img_url})
+    except Exception as e:
+        flash(f'Search error: {str(e)}', 'warning')
+    if not candidates:
+        flash('No matching posts found.', 'info')
+        return redirect(url_for('dashboard'))
+
     for candidate in candidates:
         score = detect_theft(post.original_text, candidate['text'], post.original_image_hash, candidate['img_url'])
         print(f"Score for candidate {candidate['link']}: {score}")
