@@ -8,37 +8,10 @@ import stripe
 from io import StringIO
 import csv
 from datetime import datetime, timedelta, timezone  # Added timezone
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 
 load_dotenv()
 
 app = Flask(__name__)
-limiter = Limiter(get_remote_address, app=app, default_limits=["200 per day", "50 per hour"])
-
-# Rate limit scans
-@app.route('/scan', methods=['GET'])
-@limiter.limit("5 per minute")  # Example: 5 scans/min per IP
-@login_required
-def manual_scan():
-    # Existing code...
-
-@app.route('/scan_post/<int:post_id>', methods=['GET'])
-@limiter.limit("5 per minute")
-@login_required
-def scan_post():
-    # Existing code...
-
-# Error handlers
-@app.errorhandler(404)
-def not_found(error):
-    flash('Page not found.', 'danger')
-    return redirect(url_for('dashboard'))
-
-@app.errorhandler(500)
-def server_error(error):
-    flash('Something went wrong. Try again.', 'danger')
-    return redirect(url_for('dashboard'))
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URI')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -112,7 +85,6 @@ def add_post():
             return redirect(url_for('dashboard'))
         original_text = form.original_text.data
         original_image_hash = ''
-        # Fetch and hash image if link provided
         import requests
         from bs4 import BeautifulSoup
         from PIL import Image
@@ -124,16 +96,16 @@ def add_post():
             try:
                 response = requests.get(url, headers=headers)
                 soup = BeautifulSoup(response.text, 'html.parser')
-                media_elem = soup.find('img', {'alt': 'Image'})  # X image selector
+                media_elem = soup.find('img', {'alt': 'Image'})
                 if media_elem:
                     image_url = media_elem['src']
                     img_response = requests.get(image_url, stream=True)
                     if img_response.status_code == 200:
                         img = Image.open(io.BytesIO(img_response.content))
                         original_image_hash = str(dhash(img))
-                        print(f"Image hashed: {original_image_hash}")  # Debug
+                        print(f"Image hashed: {original_image_hash}")
             except Exception as e:
-                flash(f'Image fetch error: {str(e)}', 'warning')  # Graceful fail
+                flash(f'Image fetch error: {str(e)}', 'warning')
         post = MonitoredPost(user_id=current_user.id, x_post_link=form.x_post_link.data, original_text=original_text, original_image_hash=original_image_hash)
         db.session.add(post)
         db.session.commit()
