@@ -3,27 +3,25 @@ import requests
 from PIL import Image
 from imagehash import dhash
 import io
+from collections import Counter
+import numpy as np
+from math import sqrt
+
+def cosine_similarity(vec1, vec2):
+    intersection = set(vec1.keys()) & set(vec2.keys())
+    numerator = sum([vec1[x] * vec2[x] for x in intersection])
+    sum1 = sum([vec1[x]**2 for x in vec1.keys()])
+    sum2 = sum([vec2[x]**2 for x in vec2.keys()])
+    denominator = sqrt(sum1) * sqrt(sum2)
+    if not denominator:
+        return 0.0
+    return float(numerator) / denominator
 
 def detect_theft(original_text, candidate_text, original_hash=None, candidate_img_url=None):
-    # Text similarity via Grok API
-    api_key = os.getenv('GROK_API_KEY')
-    if not api_key:
-        return 0.0  # Placeholder if no key
-    url = 'https://api.x.ai/v1/chat/completions'  # Grok API endpoint; confirm at https://x.ai/api
-    payload = {
-        "model": "grok-beta",
-        "messages": [{"role": "user", "content": f"Compute semantic similarity between text1: '{original_text}' and text2: '{candidate_text}'. Return only a float score 0-1."}]
-    }
-    headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
-    response = requests.post(url, json=payload, headers=headers)
-    if response.status_code == 200:
-        score_text = response.json()['choices'][0]['message']['content'].strip()
-        try:
-            text_score = float(score_text)
-        except ValueError:
-            text_score = 0.0
-    else:
-        text_score = 0.0
+    # Local text similarity (cosine with bag-of-words)
+    original_words = Counter(original_text.lower().split())
+    candidate_words = Counter(candidate_text.lower().split())
+    text_score = cosine_similarity(original_words, candidate_words)
 
     # Image hash comparison
     image_score = 0.0
