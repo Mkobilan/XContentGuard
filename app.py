@@ -1,15 +1,44 @@
 import os
-from flask import Flask, render_template, redirect, url_for, flash
+from flask import Flask, render_template, redirect, url_for, flash, request, Response
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from dotenv import load_dotenv
-from models import db, User
-from forms import RegistrationForm, LoginForm
-from forms import AddPostForm
-from models import MonitoredPost
+from models import db, User, MonitoredPost, TheftAlert
+from forms import RegistrationForm, LoginForm, AddPostForm
+import stripe
+from io import StringIO
+import csv
+from datetime import datetime, timedelta, timezone  # Added timezone
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 load_dotenv()
 
 app = Flask(__name__)
+limiter = Limiter(get_remote_address, app=app, default_limits=["200 per day", "50 per hour"])
+
+# Rate limit scans
+@app.route('/scan', methods=['GET'])
+@limiter.limit("5 per minute")  # Example: 5 scans/min per IP
+@login_required
+def manual_scan():
+    # Existing code...
+
+@app.route('/scan_post/<int:post_id>', methods=['GET'])
+@limiter.limit("5 per minute")
+@login_required
+def scan_post():
+    # Existing code...
+
+# Error handlers
+@app.errorhandler(404)
+def not_found(error):
+    flash('Page not found.', 'danger')
+    return redirect(url_for('dashboard'))
+
+@app.errorhandler(500)
+def server_error(error):
+    flash('Something went wrong. Try again.', 'danger')
+    return redirect(url_for('dashboard'))
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URI')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -65,6 +94,14 @@ def logout():
 def dashboard():
     return render_template('dashboard.html')
 
+@app.route('/scan', methods=['GET'])
+@login_required
+def manual_scan():
+    from tasks import run_scans
+    run_scans()
+    flash('Manual scan completed!', 'success')
+    return redirect(url_for('dashboard'))
+
 @app.route('/add_post', methods=['GET', 'POST'])
 @login_required
 def add_post():
@@ -73,38 +110,139 @@ def add_post():
         if current_user.subscription_status == 'free' and len(current_user.posts) >= 2:
             flash('Free users limited to 2 posts. Upgrade for more.', 'warning')
             return redirect(url_for('dashboard'))
-        # Fetch X post content via scraping
+        original_text = form.original_text.data
+        original_image_hash = ''
+        # Fetch and hash image if link provided
         import requests
         from bs4 import BeautifulSoup
+        from PIL import Image
+        import io
+        from imagehash import dhash
         url = form.x_post_link.data
-        headers = {'User-Agent': 'Mozilla/5.0'}  # To mimic browser
-        response = requests.get(url, headers=headers)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        # Extract text (find the post text div - adjust selector if needed based on X HTML)
-        original_text = ''
-        text_elem = soup.find('div', {'data-testid': 'tweetText'})
-        if text_elem:
-            original_text = text_elem.get_text(strip=True)
-        # Extract image URL (first image in media)
-        image_url = ''
-        media_elem = soup.find('img', {'alt': 'Image'})
-        if media_elem:
-            image_url = media_elem['src']
-        # Compute hash if image
-        original_image_hash = ''
-        if image_url:
-            from PIL import Image
-            from imagehash import dhash
-            img_response = requests.get(image_url, stream=True)
-            if img_response.status_code == 200:
-                img = Image.open(img_response.raw)
-                original_image_hash = str(dhash(img))
+        if url:
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            try:
+                response = requests.get(url, headers=headers)
+                soup = BeautifulSoup(response.text, 'html.parser')
+                media_elem = soup.find('img', {'alt': 'Image'})  # X image selector
+                if media_elem:
+                    image_url = media_elem['src']
+                    img_response = requests.get(image_url, stream=True)
+                    if img_response.status_code == 200:
+                        img = Image.open(io.BytesIO(img_response.content))
+                        original_image_hash = str(dhash(img))
+                        print(f"Image hashed: {original_image_hash}")  # Debug
+            except Exception as e:
+                flash(f'Image fetch error: {str(e)}', 'warning')  # Graceful fail
         post = MonitoredPost(user_id=current_user.id, x_post_link=form.x_post_link.data, original_text=original_text, original_image_hash=original_image_hash)
         db.session.add(post)
         db.session.commit()
         flash('Post added for monitoring!', 'success')
         return redirect(url_for('dashboard'))
     return render_template('add_post.html', form=form)
+
+@app.route('/delete_post/<int:post_id>', methods=['POST'])
+@login_required
+def delete_post(post_id):
+    post = MonitoredPost.query.filter_by(id=post_id, user_id=current_user.id).first_or_404()
+    db.session.delete(post)
+    db.session.commit()
+    flash('Post deleted successfully.', 'success')
+    return redirect(url_for('dashboard'))
+
+@app.route('/scan_post/<int:post_id>', methods=['GET'])
+@login_required
+def scan_post(post_id):
+    from utils import detect_theft
+    from tasks import send_alert
+    from models import TheftAlert
+    from datetime import datetime
+    post = MonitoredPost.query.filter_by(id=post_id, user_id=current_user.id).first_or_404()
+    candidates = [
+        {'link': 'https://x.com/fake/status/123', 'text': post.original_text, 'img_url': ''},
+        {'link': 'https://x.com/fake/status/456', 'text': 'Different text', 'img_url': ''}
+    ]
+    for candidate in candidates:
+        score = detect_theft(post.original_text, candidate['text'], post.original_image_hash, candidate['img_url'])
+        print(f"Score for candidate {candidate['link']}: {score}")
+        if score > 0.8:
+            alert = TheftAlert(monitored_post_id=post.id, user_id=current_user.id, matching_post_link=candidate['link'], similarity_score=score, evidence_text=candidate['text'])
+            db.session.add(alert)
+            db.session.commit()
+            print(f"Alert created for post: {post.x_post_link}")
+            post.last_scan = datetime.utcnow()
+            db.session.commit()
+            alert_details = {'link': candidate['link'], 'score': score}
+            send_alert(current_user.email, alert_details)
+    flash('Scan completed for this post!', 'success')
+    return redirect(url_for('dashboard'))
+
+stripe.api_key = os.getenv('STRIPE_SECRET_KEY')
+
+@app.route('/subscribe', methods=['GET'])
+@login_required
+def subscribe():
+    try:
+        session = stripe.checkout.Session.create(
+            customer_email=current_user.email,
+            payment_method_types=['card'],
+            line_items=[{
+                'price': os.getenv('STRIPE_PRICE_ID'),
+                'quantity': 1,
+            }],
+            mode='subscription',
+            success_url=url_for('dashboard', _external=True) + '?session_id={CHECKOUT_SESSION_ID}',
+            cancel_url=url_for('dashboard', _external=True),
+        )
+        return redirect(session.url, code=303)
+    except Exception as e:
+        flash(f'Subscription error: {str(e)}', 'danger')
+        return redirect(url_for('dashboard'))
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    payload = request.data
+    sig_header = request.headers.get('Stripe-Signature')
+    event = None
+    try:
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, os.getenv('STRIPE_WEBHOOK_SECRET')
+        )
+    except ValueError as e:
+        return 'Invalid payload', 400
+    except stripe.error.SignatureVerificationError as e:
+        return 'Invalid signature', 400
+    if event['type'] == 'checkout.session.completed':
+        session = event['data']['object']
+        user = User.query.filter_by(email=session['customer_email']).first()
+        if user:
+            user.subscription_status = 'paid'
+            db.session.commit()
+            print(f"Updated user {user.email} to paid.")
+    return 'Success', 200
+
+@app.route('/reports', methods=['GET'])
+@login_required
+def reports():
+    one_week_ago = datetime.now(tz=timezone.utc) - timedelta(days=7)
+    alerts = TheftAlert.query.filter_by(user_id=current_user.id).filter(TheftAlert.timestamp >= one_week_ago).all()
+    summary = f"{len(alerts)} potential thefts detected this week."
+    if alerts:
+        top_match = max(alerts, key=lambda x: x.similarity_score)
+        summary += f" Top match: {top_match.matching_post_link} (Score: {top_match.similarity_score:.2f})"
+    if request.args.get('download') == 'csv' and current_user.subscription_status == 'paid':
+        output = StringIO()
+        writer = csv.writer(output)
+        writer.writerow(['Matching Link', 'Similarity Score', 'Date', 'Evidence Text'])
+        for alert in alerts:
+            writer.writerow([alert.matching_post_link, alert.similarity_score, alert.timestamp, alert.evidence_text])
+        output.seek(0)
+        return Response(
+            output.getvalue(),
+            mimetype='text/csv',
+            headers={'Content-Disposition': 'attachment; filename=weekly_report.csv'}
+        )
+    return render_template('reports.html', summary=summary, alerts=alerts)
 
 if __name__ == '__main__':
     with app.app_context():

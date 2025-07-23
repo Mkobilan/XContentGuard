@@ -1,0 +1,29 @@
+{% extends 'base.html' %}
+{% block title %}Weekly Report{% endblock %}
+{% block content %}
+<h1>Weekly Report</h1>
+<p>{{ summary }}</p>
+{% if current_user.subscription_status == 'paid' %}
+    <a href="{{ url_for('reports', download='csv') }}" class="btn btn-primary mb-3">Download CSV</a>
+{% else %}
+    <p>Upgrade to Premium to download reports as CSV.</p>
+    <a href="{{ url_for('subscribe') }}" class="btn btn-primary mb-3">Upgrade to Premium ($7/month)</a>
+{% endif %}
+<h2>Recent Alerts</h2>
+<table class="table">
+    <thead><tr><th>Matching Link</th><th>Score</th><th>Date</th><th>Evidence</th></tr></thead>
+    <tbody>
+        {% for alert in alerts %}
+            <tr>
+                <td>{{ alert.matching_post_link }}</td>
+                <td>{{ alert.similarity_score }}</td>
+                <td>{{ alert.timestamp }}</td>
+                <td>{{ alert.evidence_text }}</td>
+            </tr>
+        {% else %}
+            <tr><td colspan="4">No alerts in the last week.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+<a href="{{ url_for('dashboard') }}" class="btn btn-secondary">Back to Dashboard</a>
+{% endblock %}

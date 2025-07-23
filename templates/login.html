@@ -1,13 +1,11 @@
-<!DOCTYPE html>
-<html>
-<head><title>Login</title></head>
-<body>
+{% extends 'base.html' %}
+{% block title %}Login{% endblock %}
+{% block content %}
 <h1>Login</h1>
-<form method="POST">
+<form method="POST" class="form">
     {{ form.hidden_tag() }}
-    {{ form.email.label }} {{ form.email }}<br>
-    {{ form.password.label }} {{ form.password }}<br>
-    {{ form.submit }}
+    <div class="mb-3">{{ form.email.label(class="form-label") }} {{ form.email(class="form-control") }}</div>
+    <div class="mb-3">{{ form.password.label(class="form-label") }} {{ form.password(class="form-control") }}</div>
+    {{ form.submit(class="btn btn-primary") }}
 </form>
-</body>
-</html>
+{% endblock %}

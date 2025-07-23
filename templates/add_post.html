@@ -5,6 +5,7 @@
 <form method="POST" class="form">
     {{ form.hidden_tag() }}
     <div class="mb-3">{{ form.x_post_link.label(class="form-label") }} {{ form.x_post_link(class="form-control") }}</div>
+    <div class="mb-3">{{ form.original_text.label(class="form-label") }} {{ form.original_text(class="form-control") }}</div>
     {{ form.submit(class="btn btn-primary") }}
 </form>
 {% endblock %}
