@@ -1,0 +1,30 @@
+{% extends 'base.html' %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<a href="{{ url_for('add_post') }}" class="btn btn-success mb-3">Add New Post</a>
+<h1>Welcome, {{ current_user.email }}!</h1>
+<p>This is your dashboard. Monitored posts and alerts will appear here.</p>
+<!-- Placeholders for features -->
+<h2>Monitored Posts</h2>
+<table class="table">
+    <thead><tr><th>Link</th><th>Added On</th><th>Last Scan</th></tr></thead>
+    <tbody>
+        {% for post in current_user.posts %}
+            <tr><td>{{ post.x_post_link }}</td><td>{{ post.timestamp }}</td><td>{{ post.last_scan or 'Not scanned yet' }}</td></tr>
+        {% else %}
+            <tr><td colspan="3">No posts monitored yet.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+<h2>Alerts</h2>
+<table class="table">
+    <thead><tr><th>Matching Link</th><th>Score</th><th>Date</th></tr></thead>
+    <tbody>
+        {% for alert in current_user.alerts %}
+            <tr><td>{{ alert.matching_post_link }}</td><td>{{ alert.similarity_score }}</td><td>{{ alert.timestamp }}</td></tr>
+        {% else %}
+            <tr><td colspan="3">No alerts yet.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}
